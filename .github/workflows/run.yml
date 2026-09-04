@@ -1,0 +1,346 @@
+name: mta-test-box
+on:
+  workflow_dispatch:
+    inputs:
+      retry_count:
+        description: 'Retry counter'
+        required: false
+        default: '0'
+      max_retries:
+        description: 'Max retries'
+        required: false
+        default: '10'
+
+jobs:
+  box:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+
+    steps:
+      - name: Verifi l distribution
+        run: |
+          . /etc/os-release
+          echo "OS       : $PRETTY_NAME"
+          echo "systemd  : $(pidof systemd > /dev/null && echo kayn || echo MAKAYNCH)"
+          case "$ID:$VERSION_ID" in
+            ubuntu:20.04|ubuntu:22.04|centos:7|centos:9)
+              echo "OK - vugex.jar kay-supporta had l distribution" ;;
+            *)
+              echo "::error::$PRETTY_NAME machi mad3oum."
+              exit 1 ;;
+          esac
+
+      - name: IPv4 bark
+        run: |
+          sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
+          sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
+          sudo sysctl -w net.ipv6.conf.lo.disable_ipv6=1
+
+      - name: Check IP + Auto Retry
+        id: ip_check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RETRY_COUNT="${{ inputs.retry_count }}"
+          MAX_RETRIES="${{ inputs.max_retries }}"
+          RETRY_COUNT=${RETRY_COUNT:-0}
+          MAX_RETRIES=${MAX_RETRIES:-10}
+          
+          echo "========================================"
+          echo "  IP BLACKLIST CHECK + AUTO RETRY"
+          echo "  Retry: $RETRY_COUNT / $MAX_RETRIES"
+          echo "========================================"
+          
+          OUT_IP=$(curl -4 -s --connect-timeout 10 https://api.ipify.org)
+          echo "IP: $OUT_IP"
+          echo "OUT_IP=$OUT_IP" >> $GITHUB_ENV
+          
+          # Reverse IP for DNSBL
+          REV_IP=$(echo "$OUT_IP" | awk -F. '{print $4"."$3"."$2"."$1}')
+          
+          # Install dig
+          sudo apt-get update -qq && sudo apt-get install -y -qq dnsutils
+          
+          # Blacklists
+          BLISTS="sbl.spamhaus.org pbl.spamhaus.org zen.spamhaus.org bl.spamcop.net b.barracudacentral.org"
+          
+          LISTED_COUNT=0
+          LISTED_NAMES=""
+          
+          for bl in $BLISTS; do
+            RESULT=$(dig +short "$REV_IP.$bl" 2>/dev/null | head -1)
+            if [ -n "$RESULT" ]; then
+              echo "  [LISTED] $bl -> $RESULT"
+              LISTED_COUNT=$((LISTED_COUNT + 1))
+              LISTED_NAMES="$LISTED_NAMES $bl"
+            else
+              echo "  [OK]     $bl"
+            fi
+          done
+          
+          echo "BLACKLIST_COUNT=$LISTED_COUNT" >> $GITHUB_ENV
+          echo "BLACKLIST_NAMES=$LISTED_NAMES" >> $GITHUB_ENV
+          
+          echo ""
+          echo "========================================"
+          echo "  RESULT: $LISTED_COUNT blacklists"
+          echo "========================================"
+          
+          # ILA BLACKLISTED -> RETRY B API
+          if [ "$LISTED_COUNT" -gt 0 ]; then
+            echo ""
+            echo "!!! IP BLACKLISTED !!!"
+            echo "Blacklists:$LISTED_NAMES"
+            echo ""
+            
+            if [ "$RETRY_COUNT" -ge "$MAX_RETRIES" ]; then
+              echo "========================================"
+              echo "  MAX RETRIES REACHED: $MAX_RETRIES"
+              echo "  CONTINUING B HAD L IP"
+              echo "========================================"
+              echo "IP_CLEAN=false" >> $GITHUB_ENV
+            else
+              NEW_RETRY=$((RETRY_COUNT + 1))
+              echo "========================================"
+              echo "  TRIGGERING NEW RUN (retry $NEW_RETRY)"
+              echo "========================================"
+              
+              # ST3ML API DIRECT - BLA GH CLI
+              RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+                -H "Authorization: token $GH_TOKEN" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "https://api.github.com/repos/${{ github.repository }}/actions/workflows/${{ github.workflow }}.yml/dispatches" \
+                -d "{\"ref\":\"${{ github.ref }}\",\"inputs\":{\"retry_count\":\"$NEW_RETRY\",\"max_retries\":\"$MAX_RETRIES\"}}" \
+                2>&1)
+              
+              echo "API Response: $RESPONSE"
+              
+              if [ "$RESPONSE" = "204" ]; then
+                echo "New run triggered successfully!"
+                sleep 3
+                
+                # Cancel had run
+                echo "Canceling current run..."
+                CANCEL_RESP=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+                  -H "Authorization: token $GH_TOKEN" \
+                  -H "Accept: application/vnd.github.v3+json" \
+                  "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel" \
+                  2>&1)
+                echo "Cancel response: $CANCEL_RESP"
+              else
+                echo "WARNING: Ma-qdrinch n-triggeri run jdida (response: $RESPONSE)"
+                echo "IP_CLEAN=false" >> $GITHUB_ENV
+                exit 1
+              fi
+              
+              echo "IP_CLEAN=false" >> $GITHUB_ENV
+              sleep 5
+              exit 1
+            fi
+          else
+            echo ""
+            echo "========================================"
+            echo "  IP CLEAN! CONTINUING..."
+            echo "========================================"
+            echo "IP_CLEAN=true" >> $GITHUB_ENV
+          fi
+
+      - name: Install ipset
+        if: env.IP_CLEAN == 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ipset
+
+      - name: Whitelist GitHub + Blacklist Microsoft
+        if: env.IP_CLEAN == 'true'
+        run: |
+          echo "========================================"
+          echo "  WHITELIST GH + BLACKLIST MS (IPv4)"
+          echo "========================================"
+
+          sudo ipset create GH_WHITELIST hash:net hashsize 4096 maxelem 65536 2>/dev/null || sudo ipset flush GH_WHITELIST
+          sudo ipset create MS_BLACKLIST hash:net hashsize 4096 maxelem 65536 2>/dev/null || sudo ipset flush MS_BLACKLIST
+
+          echo "[1/4] Jib GitHub IPs..."
+          GH_COUNT=0
+          GH_API_IPS=$(curl -4 -s --connect-timeout 10 https://api.github.com/meta 2>/dev/null | jq -r '.actions[]? // empty' 2>/dev/null || true)
+          
+          if [ -n "$GH_API_IPS" ]; then
+            while IFS= read -r ip; do
+              [ -z "$ip" ] && continue
+              if echo "$ip" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}(/([0-9]{1,2}))?$'; then
+                if sudo ipset add GH_WHITELIST "$ip" 2>/dev/null; then
+                  GH_COUNT=$((GH_COUNT + 1))
+                fi
+              fi
+            done <<< "$GH_API_IPS"
+          fi
+          echo "  -> $GH_COUNT GitHub IPs"
+
+          echo "[2/4] Jib Microsoft IPs..."
+          MS_JSON=$(curl -4 -s --connect-timeout 15 "https://endpoints.office.com/endpoints/worldwide?clientrequestid=$(uuidgen)" 2>/dev/null || true)
+          MS_TOTAL=0
+          MS_BANNED=0
+          MS_SKIPPED=0
+          
+          if [ -n "$MS_JSON" ] && echo "$MS_JSON" | jq -e . >/dev/null 2>&1; then
+            while IFS= read -r ip; do
+              [ -z "$ip" ] && continue
+              MS_TOTAL=$((MS_TOTAL + 1))
+              if ! echo "$ip" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}(/([0-9]{1,2}))?$'; then
+                MS_SKIPPED=$((MS_SKIPPED + 1))
+                continue
+              fi
+              if sudo ipset test GH_WHITELIST "$ip" 2>/dev/null; then
+                MS_SKIPPED=$((MS_SKIPPED + 1))
+                continue
+              fi
+              if sudo ipset add MS_BLACKLIST "$ip" 2>/dev/null; then
+                MS_BANNED=$((MS_BANNED + 1))
+              fi
+            done < <(echo "$MS_JSON" | jq -r '.[].ips[]? // empty' 2>/dev/null || true)
+          fi
+          echo "  -> Banned: $MS_BANNED | Skipped: $MS_SKIPPED"
+
+          echo "[3/4] Apply iptables rules..."
+          sudo iptables -D INPUT -m set --match-set GH_WHITELIST src -j ACCEPT 2>/dev/null || true
+          sudo iptables -D INPUT -m set --match-set MS_BLACKLIST src -j DROP 2>/dev/null || true
+          sudo iptables -I INPUT 1 -m set --match-set GH_WHITELIST src -j ACCEPT
+          sudo iptables -I INPUT 2 -m set --match-set MS_BLACKLIST src -j DROP
+          echo "  -> Done!"
+
+          echo "[4/4] Save..."
+          sudo ipset list GH_WHITELIST -t 2>/dev/null | grep -E '^[0-9]' > /etc/gh-whitelist.conf 2>/dev/null || true
+          sudo ipset list MS_BLACKLIST -t 2>/dev/null | grep -E '^[0-9]' > /etc/ms-blacklist.conf 2>/dev/null || true
+          
+          echo "GH_WHITELIST_COUNT=$GH_COUNT" >> $GITHUB_ENV
+          echo "MS_BLACKLIST_COUNT=$MS_BANNED" >> $GITHUB_ENV
+          echo "MS_SKIPPED_COUNT=$MS_SKIPPED" >> $GITHUB_ENV
+          
+          echo "========================================"
+          echo "  GH: $GH_COUNT | MS Banned: $MS_BANNED"
+          echo "========================================"
+
+      - name: SSH access
+        if: env.IP_CLEAN == 'true'
+        run: |
+          sudo mkdir -p /run/sshd
+          echo "root:${{ secrets.BOX_ROOT_PASSWORD }}" | sudo chpasswd
+          sudo sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/^#\?AddressFamily.*/AddressFamily inet/' /etc/ssh/sshd_config
+          grep -q '^AddressFamily' /etc/ssh/sshd_config || echo 'AddressFamily inet' | sudo tee -a /etc/ssh/sshd_config
+          sudo systemctl restart ssh
+          sudo systemctl is-active ssh
+
+      - name: Install bore
+        if: env.IP_CLEAN == 'true'
+        run: |
+          URL=$(curl -4 -s https://api.github.com/repos/ekzhang/bore/releases/latest \
+                | grep -o 'https://[^"]*x86_64-unknown-linux-musl.tar.gz' | head -1)
+          curl -4 -sL "$URL" | tar xz && sudo mv bore /usr/local/bin/
+          bore --version
+
+      - name: Tunnels
+        if: env.IP_CLEAN == 'true'
+        run: |
+          set +e
+          BORE_IP=$(getent ahostsv4 bore.pub | awk '{print $1}' | head -1)
+          [ -z "$BORE_IP" ] && BORE_IP=159.223.110.159
+          echo "bore.pub -> $BORE_IP"
+
+          wait_port () {
+            local LOG=$1 i P
+            for i in $(seq 1 20); do
+              P=$(grep -oE 'remote_port=[0-9]+|listening at [^ ]+:[0-9]+' "$LOG" 2>/dev/null \
+                  | grep -oE '[0-9]+$' | tail -1)
+              if [ -n "$P" ]; then echo "$P"; return 0; fi
+              sleep 1
+            done
+            return 1
+          }
+
+          nohup bore local 22 --to bore.pub > /tmp/bore-ssh.log 2>&1 &
+          SSH_PORT=$(wait_port /tmp/bore-ssh.log)
+
+          nohup bore local 7997 --to bore.pub --port 7997 > /tmp/bore-pmta.log 2>&1 &
+          PMTA_PORT=$(wait_port /tmp/bore-pmta.log)
+
+          if [ -z "$PMTA_PORT" ]; then
+            echo "port 7997 mekhdoud , kanjerreb random ..."
+            nohup bore local 7997 --to bore.pub > /tmp/bore-pmta2.log 2>&1 &
+            PMTA_PORT=$(wait_port /tmp/bore-pmta2.log)
+          fi
+
+          echo "=== LOGS DYAL BORE ==="
+          for f in /tmp/bore-ssh.log /tmp/bore-pmta.log /tmp/bore-pmta2.log; do
+            [ -f "$f" ] && { echo "--- $f"; cat "$f"; }
+          done
+
+          echo "SSH_PORT  = '$SSH_PORT'"
+          echo "PMTA_PORT = '$PMTA_PORT'"
+
+          { echo "BORE_IP=$BORE_IP"; echo "SSH_PORT=$SSH_PORT"; echo "PMTA_PORT=$PMTA_PORT"; } >> $GITHUB_ENV
+          [ -n "$SSH_PORT" ] || { echo "::error::bore ma-3tach port l SSH"; exit 1; }
+
+      - name: cloudflared l HTTP
+        if: env.IP_CLEAN == 'true'
+        run: |
+          curl -4 -sL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o cf.deb
+          sudo dpkg -i cf.deb
+          nohup cloudflared tunnel --edge-ip-version 4 --url http://localhost:80 > /tmp/cf.log 2>&1 &
+          sleep 12
+          CF_URL=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' /tmp/cf.log | head -1)
+          echo "CF_URL=$CF_URL" >> $GITHUB_ENV
+          echo "HTTP : $CF_URL"
+
+      - name: Ma3loumat dyal l connexion
+        if: env.IP_CLEAN == 'true'
+        run: |
+          ETH_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
+
+          cat << 'EOF' >> "$GITHUB_STEP_SUMMARY"
+          ## Connexion
+          
+          ```
+          ssh -o StrictHostKeyChecking=no -p SSH_PORT root@BORE_IP
+          ```
+          
+          | Khanet | Qima |
+          |---|---|
+          EOF
+
+          echo "| Main IP | \`$BORE_IP\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| SSH Port | \`$SSH_PORT\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Username | \`root\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Password | l qima dyal secret BOX_ROOT_PASSWORD |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Available IPs V4 | \`$ETH_IP\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| PMTA Http Port | \`$PMTA_PORT\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "PMTA console : http://$BORE_IP:$PMTA_PORT" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tracking ( HTTP ) : $CF_URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "---" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### IP Status" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Outgoing IP | \`$OUT_IP\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Blacklist Status | **CLEAN** |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "> L IP clean, mzian l l emails!" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "---" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### IP Filter" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Filter | Count |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| GitHub Whitelist | $GH_WHITELIST_COUNT |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Microsoft Blacklist | $MS_BLACKLIST_COUNT |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: khelli l box 7ayya
+        if: env.IP_CLEAN == 'true'
+        run: sleep 20000
