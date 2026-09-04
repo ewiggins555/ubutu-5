@@ -38,40 +38,39 @@ jobs:
       - name: Check IP blacklist
         id: ip_check
         run: |
-          echo "========================================"
-          echo "  IP BLACKLIST CHECK"
-          echo "========================================"
-
           OUT_IP=$(curl -4 -s --connect-timeout 10 https://api.ipify.org)
           echo "IP: $OUT_IP"
           echo "OUT_IP=$OUT_IP" >> $GITHUB_ENV
           REV_IP=$(echo "$OUT_IP" | awk -F. '{print $4"."$3"."$2"."$1}')
-
           sudo apt-get update -qq && sudo apt-get install -y -qq dnsutils
 
-          BLISTS="sbl.spamhaus.org pbl.spamhaus.org zen.spamhaus.org bl.spamcop.net b.barracudacentral.org"
-          LISTED_COUNT=0
-          LISTED_NAMES=""
-          for bl in $BLISTS; do
-            RESULT=$(dig +short "$REV_IP.$bl" 2>/dev/null | head -1)
-            if [ -n "$RESULT" ]; then
-              echo "  [LISTED] $bl -> $RESULT"
-              LISTED_COUNT=$((LISTED_COUNT + 1))
-              LISTED_NAMES="$LISTED_NAMES $bl"
-            else
-              echo "  [OK]     $bl"
-            fi
-          done
-          echo "RESULT: $LISTED_COUNT blacklists"
+          # FATAL = kat-fashel l run w tracker y3awd b IP jdida.
+          # WARN  = ghir kat-bayen, ma-kat-fashelch (barracuda/spamcop kat-listiw
+          #         bzzaf d IPs dyal cloud, machi dima important l email).
+          FATAL_BL="zen.spamhaus.org"
+          WARN_BL="sbl.spamhaus.org pbl.spamhaus.org bl.spamcop.net b.barracudacentral.org"
 
-          # ILA BLACKLISTED -> n-fashlo l run, w tracker gha y3awd b IP jdida.
-          # (retry-on-failure f tracker kay-bedddel had l3iba li kant f workflow)
-          if [ "$LISTED_COUNT" -gt 0 ]; then
-            echo "::error::IP $OUT_IP blacklisted f:$LISTED_NAMES"
+          FATAL_HITS=""
+          for bl in $FATAL_BL; do
+            R=$(dig +short "$REV_IP.$bl" 2>/dev/null | head -1)
+            if [ -n "$R" ]; then echo "  [FATAL] $bl -> $R"; FATAL_HITS="$FATAL_HITS $bl"; else echo "  [OK]    $bl"; fi
+          done
+          WARN_HITS=""
+          for bl in $WARN_BL; do
+            R=$(dig +short "$REV_IP.$bl" 2>/dev/null | head -1)
+            if [ -n "$R" ]; then echo "  [warn]  $bl -> $R"; WARN_HITS="$WARN_HITS$bl "; else echo "  [OK]    $bl"; fi
+          done
+
+          if [ -n "$FATAL_HITS" ]; then
+            echo "::error::IP $OUT_IP blacklisted (fatal):$FATAL_HITS"
+            echo "BLACKLIST=fatal:$FATAL_HITS" >> $GITHUB_ENV
             exit 1
           fi
 
-          echo "IP CLEAN! CONTINUING..."
+          BL_STATUS="clean"
+          [ -n "$WARN_HITS" ] && BL_STATUS="warn: $WARN_HITS"
+          echo "BLACKLIST=$BL_STATUS" >> $GITHUB_ENV
+          echo "IP CLEAN 3la l fatal lists. warnings: ${WARN_HITS:-none}"
           echo "IP_CLEAN=true" >> $GITHUB_ENV
 
       - name: Install ipset
@@ -230,8 +229,8 @@ jobs:
         run: |
           if [ -z "$CORR" ]; then echo "ma-kaynch correlation, skip report"; exit 0; fi
           ETH_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
-          PAYLOAD=$(printf '{"ip":"%s","ssh_port":"%s","pmta_port":"%s","out_ip":"%s","eth_ip":"%s","user":"root"}' \
-            "$BORE_IP" "$SSH_PORT" "$PMTA_PORT" "$OUT_IP" "$ETH_IP")
+          PAYLOAD=$(printf '{"ip":"%s","ssh_port":"%s","pmta_port":"%s","out_ip":"%s","eth_ip":"%s","blacklist":"%s","user":"root"}' \
+            "$BORE_IP" "$SSH_PORT" "$PMTA_PORT" "$OUT_IP" "$ETH_IP" "$BLACKLIST")
           echo "Reporting l tracker ($CORR): $PAYLOAD"
           # --retry b3da l cold-start dyal l instance l free
           CODE=$(curl -4 -s -o /dev/null -w '%{http_code}' --max-time 45 \
