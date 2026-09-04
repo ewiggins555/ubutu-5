@@ -2,14 +2,13 @@ name: mta-test-box
 on:
   workflow_dispatch:
     inputs:
-      retry_count:
-        description: 'Retry counter'
+      correlation_id:
+        description: 'Kat3emmerha l tracker bax y-matchi had run'
         required: false
-        default: '0'
-      max_retries:
-        description: 'Max retries'
-        required: false
-        default: '10'
+        default: ''
+
+# Tracker kay-injecti correlation_id, w kay-matchi b had run-name.
+run-name: Box ${{ inputs.correlation_id }}
 
 jobs:
   box:
@@ -36,37 +35,23 @@ jobs:
           sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
           sudo sysctl -w net.ipv6.conf.lo.disable_ipv6=1
 
-      - name: Check IP + Auto Retry
+      - name: Check IP blacklist
         id: ip_check
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          RETRY_COUNT="${{ inputs.retry_count }}"
-          MAX_RETRIES="${{ inputs.max_retries }}"
-          RETRY_COUNT=${RETRY_COUNT:-0}
-          MAX_RETRIES=${MAX_RETRIES:-10}
-          
           echo "========================================"
-          echo "  IP BLACKLIST CHECK + AUTO RETRY"
-          echo "  Retry: $RETRY_COUNT / $MAX_RETRIES"
+          echo "  IP BLACKLIST CHECK"
           echo "========================================"
-          
+
           OUT_IP=$(curl -4 -s --connect-timeout 10 https://api.ipify.org)
           echo "IP: $OUT_IP"
           echo "OUT_IP=$OUT_IP" >> $GITHUB_ENV
-          
-          # Reverse IP for DNSBL
           REV_IP=$(echo "$OUT_IP" | awk -F. '{print $4"."$3"."$2"."$1}')
-          
-          # Install dig
+
           sudo apt-get update -qq && sudo apt-get install -y -qq dnsutils
-          
-          # Blacklists
+
           BLISTS="sbl.spamhaus.org pbl.spamhaus.org zen.spamhaus.org bl.spamcop.net b.barracudacentral.org"
-          
           LISTED_COUNT=0
           LISTED_NAMES=""
-          
           for bl in $BLISTS; do
             RESULT=$(dig +short "$REV_IP.$bl" 2>/dev/null | head -1)
             if [ -n "$RESULT" ]; then
@@ -77,73 +62,17 @@ jobs:
               echo "  [OK]     $bl"
             fi
           done
-          
-          echo "BLACKLIST_COUNT=$LISTED_COUNT" >> $GITHUB_ENV
-          echo "BLACKLIST_NAMES=$LISTED_NAMES" >> $GITHUB_ENV
-          
-          echo ""
-          echo "========================================"
-          echo "  RESULT: $LISTED_COUNT blacklists"
-          echo "========================================"
-          
-          # ILA BLACKLISTED -> RETRY B API
+          echo "RESULT: $LISTED_COUNT blacklists"
+
+          # ILA BLACKLISTED -> n-fashlo l run, w tracker gha y3awd b IP jdida.
+          # (retry-on-failure f tracker kay-bedddel had l3iba li kant f workflow)
           if [ "$LISTED_COUNT" -gt 0 ]; then
-            echo ""
-            echo "!!! IP BLACKLISTED !!!"
-            echo "Blacklists:$LISTED_NAMES"
-            echo ""
-            
-            if [ "$RETRY_COUNT" -ge "$MAX_RETRIES" ]; then
-              echo "========================================"
-              echo "  MAX RETRIES REACHED: $MAX_RETRIES"
-              echo "  CONTINUING B HAD L IP"
-              echo "========================================"
-              echo "IP_CLEAN=false" >> $GITHUB_ENV
-            else
-              NEW_RETRY=$((RETRY_COUNT + 1))
-              echo "========================================"
-              echo "  TRIGGERING NEW RUN (retry $NEW_RETRY)"
-              echo "========================================"
-              
-              # ST3ML API DIRECT - BLA GH CLI
-              RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-                -H "Authorization: token $GH_TOKEN" \
-                -H "Accept: application/vnd.github.v3+json" \
-                "https://api.github.com/repos/${{ github.repository }}/actions/workflows/${{ github.workflow }}.yml/dispatches" \
-                -d "{\"ref\":\"${{ github.ref }}\",\"inputs\":{\"retry_count\":\"$NEW_RETRY\",\"max_retries\":\"$MAX_RETRIES\"}}" \
-                2>&1)
-              
-              echo "API Response: $RESPONSE"
-              
-              if [ "$RESPONSE" = "204" ]; then
-                echo "New run triggered successfully!"
-                sleep 3
-                
-                # Cancel had run
-                echo "Canceling current run..."
-                CANCEL_RESP=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-                  -H "Authorization: token $GH_TOKEN" \
-                  -H "Accept: application/vnd.github.v3+json" \
-                  "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel" \
-                  2>&1)
-                echo "Cancel response: $CANCEL_RESP"
-              else
-                echo "WARNING: Ma-qdrinch n-triggeri run jdida (response: $RESPONSE)"
-                echo "IP_CLEAN=false" >> $GITHUB_ENV
-                exit 1
-              fi
-              
-              echo "IP_CLEAN=false" >> $GITHUB_ENV
-              sleep 5
-              exit 1
-            fi
-          else
-            echo ""
-            echo "========================================"
-            echo "  IP CLEAN! CONTINUING..."
-            echo "========================================"
-            echo "IP_CLEAN=true" >> $GITHUB_ENV
+            echo "::error::IP $OUT_IP blacklisted f:$LISTED_NAMES"
+            exit 1
           fi
+
+          echo "IP CLEAN! CONTINUING..."
+          echo "IP_CLEAN=true" >> $GITHUB_ENV
 
       - name: Install ipset
         if: env.IP_CLEAN == 'true'
@@ -293,6 +222,20 @@ jobs:
           CF_URL=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' /tmp/cf.log | head -1)
           echo "CF_URL=$CF_URL" >> $GITHUB_ENV
           echo "HTTP : $CF_URL"
+
+      - name: Report l tracker
+        if: env.IP_CLEAN == 'true'
+        env:
+          CORR: ${{ inputs.correlation_id }}
+        run: |
+          if [ -z "$CORR" ]; then echo "ma-kaynch correlation, skip report"; exit 0; fi
+          ETH_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
+          PAYLOAD=$(printf '{"ip":"%s","ssh_port":"%s","pmta_port":"%s","http_url":"%s","eth_ip":"%s","user":"root"}' \
+            "$BORE_IP" "$SSH_PORT" "$PMTA_PORT" "$CF_URL" "$ETH_IP")
+          echo "Reporting l tracker: $PAYLOAD"
+          curl -4 -s --max-time 20 -X POST "https://gha-run-tracker.onrender.com/api/ingest/$CORR" \
+            -H "Content-Type: application/json" -d "$PAYLOAD" \
+            && echo "  -> reported OK" || echo "  -> report failed (machi mochkil)"
 
       - name: Ma3loumat dyal l connexion
         if: env.IP_CLEAN == 'true'
