@@ -232,10 +232,14 @@ jobs:
           ETH_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
           PAYLOAD=$(printf '{"ip":"%s","ssh_port":"%s","pmta_port":"%s","http_url":"%s","eth_ip":"%s","user":"root"}' \
             "$BORE_IP" "$SSH_PORT" "$PMTA_PORT" "$CF_URL" "$ETH_IP")
-          echo "Reporting l tracker: $PAYLOAD"
-          curl -4 -s --max-time 20 -X POST "https://gha-run-tracker.onrender.com/api/ingest/$CORR" \
-            -H "Content-Type: application/json" -d "$PAYLOAD" \
-            && echo "  -> reported OK" || echo "  -> report failed (machi mochkil)"
+          echo "Reporting l tracker ($CORR): $PAYLOAD"
+          # --retry b3da l cold-start dyal l instance l free
+          CODE=$(curl -4 -s -o /dev/null -w '%{http_code}' --max-time 45 \
+            --retry 4 --retry-delay 8 --retry-all-errors \
+            -X POST "https://gha-run-tracker.onrender.com/api/ingest/$CORR" \
+            -H "Content-Type: application/json" -d "$PAYLOAD" || echo "000")
+          echo "Tracker HTTP: $CODE"
+          echo "Tracker report: HTTP $CODE" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Ma3loumat dyal l connexion
         if: env.IP_CLEAN == 'true'
