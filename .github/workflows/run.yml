@@ -230,8 +230,8 @@ jobs:
         run: |
           if [ -z "$CORR" ]; then echo "ma-kaynch correlation, skip report"; exit 0; fi
           ETH_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
-          PAYLOAD=$(printf '{"ip":"%s","ssh_port":"%s","pmta_port":"%s","http_url":"%s","eth_ip":"%s","user":"root"}' \
-            "$BORE_IP" "$SSH_PORT" "$PMTA_PORT" "$CF_URL" "$ETH_IP")
+          PAYLOAD=$(printf '{"ip":"%s","ssh_port":"%s","pmta_port":"%s","out_ip":"%s","eth_ip":"%s","user":"root"}' \
+            "$BORE_IP" "$SSH_PORT" "$PMTA_PORT" "$OUT_IP" "$ETH_IP")
           echo "Reporting l tracker ($CORR): $PAYLOAD"
           # --retry b3da l cold-start dyal l instance l free
           CODE=$(curl -4 -s -o /dev/null -w '%{http_code}' --max-time 45 \
